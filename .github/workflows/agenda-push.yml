@@ -1,0 +1,73 @@
+name: 🔔 StreamFlix — Web Push (a cada 2h)
+
+on:
+  # Executa automaticamente a cada 2 horas, 24h por dia
+  schedule:
+    - cron: '0 */2 * * *'
+
+  # Permite execução manual pelo painel do GitHub Actions
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Ativar log verbose (true/false)'
+        required: false
+        default: 'false'
+
+# Garante que apenas uma instância rode por vez
+concurrency:
+  group: web-push-cron
+  cancel-in-progress: false
+
+jobs:
+  check-and-push:
+    name: Verificar fontes e enviar notificações
+    runs-on: ubuntu-latest
+    timeout-minutes: 15        # Mata o job se travar (evita consumo de minutos)
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────
+      - name: 📥 Checkout do repositório
+        uses: actions/checkout@v4
+
+      # ── 2. Node.js 20 ────────────────────────────────────────────────
+      - name: ⚙️ Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # Sem cache de npm pois instalamos com --no-save (sem package-lock)
+
+      # ── 3. Instalar dependência (apenas web-push, sem alterar projeto) ─
+      - name: 📦 Instalar web-push
+        run: npm install --no-save web-push
+        # --no-save: não cria/altera package.json nem package-lock.json
+
+      # ── 4. Executar o script ─────────────────────────────────────────
+      - name: 🚀 Executar check-and-push
+        env:
+          # Redis
+          UPSTASH_REDIS_REST_URL:   ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          # VAPID
+          VAPID_PUBLIC_KEY:         ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY:        ${{ secrets.VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT:            ${{ secrets.VAPID_SUBJECT }}
+          # TMDB (use um ou outro; TMDB_BEARER tem precedência no script)
+          TMDB_BEARER:              ${{ secrets.TMDB_BEARER }}
+          TMDB_API_KEY:             ${{ secrets.TMDB_API_KEY }}
+          # Site
+          SITE_URL:                 ${{ secrets.SITE_URL }}
+          # Debug opcional (workflow_dispatch)
+          NODE_DEBUG:               ${{ github.event.inputs.debug == 'true' && 'http,https' || '' }}
+        run: node scripts/check-and-push.mjs
+
+      # ── 5. Resumo no GitHub Actions UI ───────────────────────────────
+      - name: 📊 Resumo da execução
+        if: always()
+        run: |
+          echo "## 🔔 Web Push — Resultado" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Hora (UTC)** | $(date -u '+%Y-%m-%d %H:%M:%S') |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trigger** | \`${{ github.event_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Status** | ${{ job.status }} |" >> $GITHUB_STEP_SUMMARY
