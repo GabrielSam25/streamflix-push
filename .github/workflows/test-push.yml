@@ -1,0 +1,34 @@
+name: Teste Manual de Push
+
+on:
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Título da notificação'
+        required: false
+        default: 'Teste StreamFlix 🔔'
+      body:
+        description: 'Mensagem da notificação'
+        required: false
+        default: 'Notificação de teste chegando no PC e no celular!'
+
+jobs:
+  send-test-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install web-push
+      - name: Disparar push de teste
+        env:
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          VAPID_PUBLIC_KEY: ${{ secrets.VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+          SITE_URL: ${{ secrets.SITE_URL }}
+          VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
+          TEST_TITLE: ${{ github.event.inputs.title }}
+          TEST_BODY: ${{ github.event.inputs.body }}
+        run: node scripts/test-push.cjs
