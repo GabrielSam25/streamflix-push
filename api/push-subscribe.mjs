@@ -1,39 +1,27 @@
 /**
- * api/push-subscribe.mjs — Vercel Serverless Function (ESM)
+ * api/push-subscribe.mjs — Vercel Serverless Function (ESM / Node.js)
  *
  * POST   /api/push-subscribe  → salva inscrição + reminders no Redis
  * DELETE /api/push-subscribe  → remove inscrição do Redis
  * OPTIONS                     → preflight CORS
- *
- * Env vars necessárias na Vercel:
- *   UPSTASH_REDIS_REST_URL
- *   UPSTASH_REDIS_REST_TOKEN
  */
 
 import { createHash } from 'node:crypto';
 
 /* ── Helpers Redis (Upstash REST) ──────────────────────────────────── */
 
-const redisUrl   = () => process.env.UPSTASH_REDIS_REST_URL;
-const redisToken = () => process.env.UPSTASH_REDIS_REST_TOKEN;
-
-/**
- * Executa um comando Redis via REST API do Upstash.
- * @param  {...(string|number)} args  Partes do comando, ex: 'HSET', 'sf_subs', key, value
- * @returns {Promise<any>} resultado da resposta JSON
- */
 async function redis(...args) {
-  const url   = redisUrl();
-  const token = redisToken();
+  const url   = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
 
   if (!url || !token) {
     throw new Error('Upstash env vars não configuradas');
   }
 
-  const res = await fetch(`${url}`, {
-    method:  'POST',
+  const res = await fetch(url, {
+    method: 'POST',
     headers: {
-      Authorization:  `Bearer ${token}`,
+      Authorization: `Bearer ${token}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(args),
@@ -48,27 +36,28 @@ async function redis(...args) {
   return json.result;
 }
 
-/* ── CORS headers ──────────────────────────────────────────────────── */
+/* ── CORS + leitura segura do body ─────────────────────────────────── */
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin':  '*',
-  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Max-Age':       '86400',
-};
+function setCors(res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '86400');
+}
 
-function corsResponse(body, status = 200, extra = {}) {
-  return new Response(
-    typeof body === 'string' ? body : JSON.stringify(body),
-    {
-      status,
-      headers: {
-        'Content-Type': 'application/json',
-        ...CORS_HEADERS,
-        ...extra,
-      },
-    }
-  );
+async function readJsonBody(req) {
+  if (req.body && typeof req.body === 'object') return req.body;
+  if (typeof req.body === 'string') {
+    try { return JSON.parse(req.body || '{}'); } catch { return {}; }
+  }
+
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+  }
+  const raw = Buffer.concat(chunks).toString('utf8').trim();
+  if (!raw) return {};
+  try { return JSON.parse(raw); } catch { return {}; }
 }
 
 /* ── Gera ID estável a partir do endpoint ──────────────────────────── */
@@ -77,81 +66,64 @@ function subIdFromEndpoint(endpoint) {
   return createHash('sha256').update(endpoint).digest('hex').slice(0, 24);
 }
 
-/* ── Handler principal ─────────────────────────────────────────────── */
+/* ── Handler principal (Node.js Serverless) ────────────────────────── */
 
-export default async function handler(req) {
-  const method = req.method.toUpperCase();
+export default async function handler(req, res) {
+  setCors(res);
 
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  const method = (req.method || 'GET').toUpperCase();
 
   /* Preflight CORS */
   if (method === 'OPTIONS') {
-    return corsResponse('', 204);
+    return res.status(200).end();
   }
 
-  /* Lê body uma única vez */
-  let body = {};
   try {
-    body = await req.json();
-  } catch {
-    // Permite body vazio em DELETE sem payload
-  }
+    const body = await readJsonBody(req);
 
-  /* ── POST: Inscrever / atualizar reminders ── */
-  if (method === 'POST') {
-    const { subscription, reminders = [] } = body;
+    /* ── POST: Inscrever / atualizar reminders ── */
+    if (method === 'POST') {
+      const { subscription, reminders = [] } = body;
 
-    if (!subscription?.endpoint) {
-      return corsResponse({ error: 'subscription.endpoint obrigatório' }, 400);
+      if (!subscription?.endpoint) {
+        return res.status(400).json({ error: 'subscription.endpoint obrigatório' });
+      }
+
+      if (!subscription?.keys?.p256dh || !subscription?.keys?.auth) {
+        return res.status(400).json({ error: 'subscription.keys (p256dh, auth) obrigatórios' });
+      }
+
+      const subId = subIdFromEndpoint(subscription.endpoint);
+
+      const record = JSON.stringify({
+        subId,
+        subscription,
+        reminders,
+        updatedAt: new Date().toISOString(),
+      });
+
+      await redis('HSET', 'sf_subs', subId, record);
+
+      return res.status(200).json({ ok: true, subId });
     }
 
-    // Valida que subscription tem as chaves VAPID mínimas
-    if (!subscription?.keys?.p256dh || !subscription?.keys?.auth) {
-      return corsResponse({ error: 'subscription.keys (p256dh, auth) obrigatórios' }, 400);
+    /* ── DELETE: Cancelar inscrição ── */
+    if (method === 'DELETE' || body?.action === 'unsubscribe') {
+      const { subscription } = body;
+
+      if (!subscription?.endpoint) {
+        return res.status(400).json({ error: 'subscription.endpoint obrigatório para cancelar' });
+      }
+
+      const subId = subIdFromEndpoint(subscription.endpoint);
+
+      await redis('HDEL', 'sf_subs', subId);
+
+      return res.status(200).json({ ok: true, subId, removed: true });
     }
 
-    const subId = subIdFromEndpoint(subscription.endpoint);
-
-    const record = JSON.stringify({
-      subId,
-      subscription,
-      reminders,         // [{ id, type, title, releaseDate, poster_path }]
-      updatedAt: new Date().toISOString(),
-    });
-
-    // HSET sf_subs <subId> <json>
-    await redis('HSET', 'sf_subs', subId, record);
-
-    return corsResponse({ ok: true, subId });
+    return res.status(405).json({ error: `Método ${method} não suportado` });
+  } catch (err) {
+    return res.status(500).json({ error: err?.message || 'Erro interno' });
   }
-
-  /* ── DELETE: Cancelar inscrição ── */
-  if (method === 'DELETE' || body?.action === 'unsubscribe') {
-    const { subscription } = body;
-
-    if (!subscription?.endpoint) {
-      return corsResponse({ error: 'subscription.endpoint obrigatório para cancelar' }, 400);
-    }
-
-    const subId = subIdFromEndpoint(subscription.endpoint);
-
-    // Remove do hash
-    await redis('HDEL', 'sf_subs', subId);
-
-    return corsResponse({ ok: true, subId, removed: true });
-  }
-
-  /* Método não suportado */
-  return corsResponse({ error: `Método ${method} não suportado` }, 405);
 }
-
-/* Diz à Vercel que é um Edge-compatible handler (opcional, funciona em Serverless também) */
-export const config = {
-  runtime: 'nodejs20.x',
-};
