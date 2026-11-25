@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import * as webpushNS from 'web-push';
 
-const webpush = webpushNS.default || webpushNS;
+const webpush =
+  webpushNS.default && typeof webpushNS.default.sendNotification === 'function'
+    ? webpushNS.default
+    : webpushNS;
+
 const REDIS_URL = process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
 const SITE_URL = (process.env.SITE_URL || '').replace(/\/$/, '') || '/';
@@ -20,7 +24,12 @@ async function redis(...args) {
 }
 
 async function main() {
-  for (const v of ['UPSTASH_REDIS_REST_URL', 'UPSTASH_REDIS_REST_TOKEN', 'VAPID_PUBLIC_KEY', 'VAPID_PRIVATE_KEY']) {
+  for (const v of [
+    'UPSTASH_REDIS_REST_URL',
+    'UPSTASH_REDIS_REST_TOKEN',
+    'VAPID_PUBLIC_KEY',
+    'VAPID_PRIVATE_KEY',
+  ]) {
     if (!process.env[v]) throw new Error(`Env var ausente: ${v}`);
   }
 
@@ -36,19 +45,28 @@ async function main() {
     return;
   }
 
+  const total = Math.floor(flat.length / 2);
+  console.log(`📋 ${total} inscrição(ões) encontrada(s) em sf_subs.`);
+
   const payload = JSON.stringify({
     title: process.env.TEST_TITLE || 'Teste StreamFlix 🔔',
-    body: process.env.TEST_BODY || 'Se você recebeu isso no PC e no celular, o Web Push está 100% funcionando!',
+    body: process.env.TEST_BODY || 'Notificação de teste chegando no PC e no celular!',
     icon: '/favicon.svg',
     tag: `sf-test-${Date.now()}`,
     url: SITE_URL,
   });
 
-  let sent = 0, expired = 0, failed = 0;
+  let sent = 0;
+  let expired = 0;
+  let failed = 0;
 
   for (let i = 0; i < flat.length; i += 2) {
     let entry;
-    try { entry = JSON.parse(flat[i + 1]); } catch { continue; }
+    try {
+      entry = JSON.parse(flat[i + 1]);
+    } catch {
+      continue;
+    }
 
     try {
       await webpush.sendNotification(entry.subscription, payload);
@@ -71,6 +89,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err);
+  console.error('❌ Erro fatal:', err);
   process.exit(1);
 });
