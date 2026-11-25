@@ -17,7 +17,7 @@
  *   VAPID_SUBJECT            (opcional, ex: mailto:admin@streamflix.app)
  */
 
-import webpush from 'web-push';
+import * as webpush from 'web-push';
 
 /* ════════════════════════════════════════════════════════════════════
  *  REDIS (Upstash REST)
