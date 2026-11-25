@@ -143,7 +143,6 @@ export default async function handler(req) {
   return corsResponse({ error: `Método ${method} não suportado` }, 405);
 }
 
-/* Diz à Vercel que é um Edge-compatible handler (opcional, funciona em Serverless também) */
 export const config = {
-  runtime: 'nodejs20.x',
+  runtime: 'nodejs',
 };
