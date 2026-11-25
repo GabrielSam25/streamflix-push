@@ -82,6 +82,14 @@ function subIdFromEndpoint(endpoint) {
 export default async function handler(req) {
   const method = req.method.toUpperCase();
 
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
   /* Preflight CORS */
   if (method === 'OPTIONS') {
     return corsResponse('', 204);
@@ -143,6 +151,7 @@ export default async function handler(req) {
   return corsResponse({ error: `Método ${method} não suportado` }, 405);
 }
 
+/* Diz à Vercel que é um Edge-compatible handler (opcional, funciona em Serverless também) */
 export const config = {
-  runtime: 'nodejs',
+  runtime: 'nodejs20.x',
 };
