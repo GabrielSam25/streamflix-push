@@ -31,4 +31,4 @@ jobs:
           VAPID_SUBJECT: ${{ secrets.VAPID_SUBJECT }}
           TEST_TITLE: ${{ github.event.inputs.title }}
           TEST_BODY: ${{ github.event.inputs.body }}
-        run: node scripts/test-push.cjs
+        run: node scripts/test-push.mjs
